@@ -1,0 +1,900 @@
+Project Directory Structure:
+├── cmd
+│   ├── bundle.go
+│   ├── init.go
+│   ├── review.go
+│   └── root.go
+├── internal
+│   ├── files
+│   │   ├── reading.go
+│   │   └── writing.go
+│   ├── formatting
+│   │   └── format.go
+│   ├── logging
+│   │   └── usage.go
+│   ├── review
+│   │   └── review.go
+├── main.go
+├── scripts
+│   ├── install.ps1
+│   └── install.sh
+
+
+File: 
+cmd\bundle.go
+Content: 
+// Description: This file contains the generate command which generates a textual representation of the project structure.
+package cmd
+
+import (
+	"log"
+	"time"
+
+	"github.com/AkhilSharma90/AI-Code-Bundler/internal/files"
+	"github.com/AkhilSharma90/AI-Code-Bundler/internal/formatting"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+var standardPrefixesToIgnore = []string{
+	// ignore .git, .idea, .vscode, etc.
+	".",
+	// ignore codefuse specific files
+	"codefuse",
+	// ignore go.mod, go.sum, etc.
+	"go",
+	"license",
+	// readme
+	"readme",
+	"README",
+	// poetry
+	"pyproject.toml",
+	"poetry.lock",
+	"venv",
+	// output files
+	"build",
+	"dist",
+	"out",
+	"target",
+	"bin",
+	// javascript
+	"node_modules",
+	"coverage",
+	"public",
+	"static",
+	"Thumbs.db",
+	"package",
+	"yarn.lock",
+	"package",
+	"tsconfig",
+	// next.js
+	"next.config",
+	"next-env",
+	// python
+	"__pycache__",
+	"logs",
+	// java
+	"gradle",
+	// c++
+	"CMakeLists",
+	// ruby
+	"vendor",
+	"Gemfile",
+	// php
+	"composer",
+	// tailwind
+	"tailwind",
+	"postcss",
+}
+
+var standardExtensionsToIgnore = []string{
+	".jpeg",
+	".jpg",
+	".png",
+	".gif",
+	".pdf",
+	".svg",
+	".ico",
+	".woff",
+	".woff2",
+	".eot",
+	".ttf",
+	".otf",
+}
+
+// generateCmd represents the generate command
+var generateCmd = &cobra.Command{
+	Use:   "bundle",
+	Short: "Bundle your project into a single file",
+	Long: `Bundle your project into a single file, starting from the directory you are in.
+By default common configuration and setup files (ex. .vscode, .venv, package.lock) are ignored as well as non-text extensions like .jpeg, .png, .pdf. 
+
+Example usage:
+codefuse bundle
+codefuse bundle --ignore-pre=tests,readme --ignore-ext=.txt 
+codefuse bundle --ignore-pre=tests,readme --include-ext=.go,.py,.js
+`,
+	Args: cobra.NoArgs,
+	Run: func(_ *cobra.Command, _ []string) {
+		// start timer
+		start := time.Now()
+
+		// get all file paths from the root directory
+		rootDir := "."
+
+		prefixesToIgnore := viper.GetStringSlice("ignore-pre")
+		prefixesToIgnore = append(prefixesToIgnore, standardPrefixesToIgnore...)
+
+		extensionsToIgnore := viper.GetStringSlice("ignore-ext")
+		extensionsToIgnore = append(extensionsToIgnore, standardExtensionsToIgnore...)
+
+		extensionsToInclude := viper.GetStringSlice("include-ext")
+
+		filePaths, err := files.GetAllFilePaths(rootDir, prefixesToIgnore,
+			extensionsToInclude, extensionsToIgnore)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+
+		// generate the project tree
+		projectTree := formatting.GeneratePathTree(filePaths)
+
+		maxConcurrency := 100
+		// get the content of all files
+		fileContentMap, err := files.GetContentMapOfFiles(filePaths, maxConcurrency)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// create the project string
+		projectString := formatting.CreateProjectString(projectTree, fileContentMap)
+
+		outputFile := "codefuse-project.txt"
+		// save the project string to a file
+		err = files.SaveStringToFile(projectString, outputFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// log success
+		log.Println("Project overview succesfully saved to: " + outputFile)
+
+		// estimate number of tokens
+		log.Printf("Estimated token count: %d - %d tokens",
+			len(projectString)/4, len(projectString)/3)
+
+		elapsed := time.Since(start)
+		log.Printf("Execution time: %s", elapsed)
+
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(generateCmd)
+	generateCmd.Flags().StringSlice("ignore-pre", []string{}, "Comma-separated prefixes of file and dir names to ignore. Ex tests,readme")
+	generateCmd.Flags().StringSlice("ignore-ext", []string{}, "Comma-separated file extensions to ignore. Ex .txt,.md")
+	generateCmd.Flags().StringSlice("include-ext", []string{}, "Comma-separated file extensions to include. Ex .go,.py,.js")
+	err := viper.BindPFlag("ignore-pre", generateCmd.Flags().Lookup("ignore-pre"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = viper.BindPFlag("ignore-ext", generateCmd.Flags().Lookup("ignore-ext"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = viper.BindPFlag("include-ext", generateCmd.Flags().Lookup("include-ext"))
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+
+File: 
+cmd\init.go
+Content: 
+// Description: This file implements the "init" command, which generates a default configuration file in the current directory.
+package cmd
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+// Define a default template configuration
+var defaultConfig = []byte(`# Configuration for the tool
+
+# specify the prefixes of files and directories to ignore (by default common configuration files are ignored)
+ignore-pre: # ex. [tests, readme.md, scripts]
+# specify the extensions of files to ignore 
+ignore-ext: # ex. [.go, .py, .js]
+# specify the extensions of files to include 
+include-ext: # ex. [.go, .py, .js]
+`)
+
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Initialize a default configuration file",
+	Long: `Generates a default configuration file (.codefuse-config.yaml) in the current directory.
+
+The configuration file includes:
+- API key for accessing the Code AI Review service (required for the "review" command)
+- File and directory ignore patterns when generating the project overview
+- File extensions to include when generating the project overview
+
+You can modify this file as needed to suit your project's structure.
+`,
+	Run: func(cmd *cobra.Command, args []string) {
+		configFileName := ".codefuse-config.yaml"
+
+		// Check if the config file already exists
+		if viper.ConfigFileUsed() != "" {
+			fmt.Println("Config file already exists at ", viper.ConfigFileUsed())
+			os.Exit(1)
+		}
+
+		// Write the default config using Viper
+		err := os.WriteFile(configFileName, defaultConfig, 0644)
+		if err != nil {
+			fmt.Println("Unable to write config file: ", err)
+			os.Exit(1)
+		}
+
+		// Inform the user
+		fmt.Println("Config file created at:", configFileName)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(initCmd)
+}
+
+
+File: 
+cmd\review.go
+Content: 
+package cmd
+
+import (
+	"log"
+	"os"
+
+	"github.com/AkhilSharma90/AI-Code-Bundler/internal/review"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+// reviewCmd represents the review command
+var reviewCmd = &cobra.Command{
+	Use:   "review",
+	Short: "Let an AI review your codefuse-project.txt",
+	Long:  `Let an AI review the codefuse-project.txt you generated with the bundle command.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		apiKey := viper.GetString("codefuse")
+		if apiKey == "" {
+			log.Fatal(`Api key is required for review.`)
+		}
+		dat, err := os.ReadFile("codefuse-project.txt")
+		if err != nil {
+			log.Fatal("Could not find codefuse-project.txt. Did you forget to run the \"codefuse bundle\" command?")
+		}
+		review.Review(string(dat), apiKey)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(reviewCmd)
+	reviewCmd.Flags().String("codefuse_api_key", "", "Your Code AI Review API key ")
+	err := viper.BindPFlag("codefuse_api_key", reviewCmd.Flags().Lookup("codefuse_api_key"))
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+
+File: 
+cmd\root.go
+Content: 
+// Package cmd provides the root command for the codefuse tool.
+package cmd
+
+import (
+	"os"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+var Version = "dev"
+
+// rootCmd represents the base command when called without any subcommands
+var rootCmd = &cobra.Command{
+	Use:     "codefuse",
+	Version: Version,
+	Short:   "Initialize",
+	Long: `Allows you to bundle your codebase and let it be reviewed by an AI.
+`,
+}
+
+// Execute adds all child commands to the root command and sets flags appropriately.
+// This is called by main.main(). It only needs to happen once to the rootCmd.
+func Execute() {
+	err := rootCmd.Execute()
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+func init() {
+	cobra.OnInitialize(initConfig)
+	// otherwise the completion command will be available
+	rootCmd.Root().CompletionOptions.DisableDefaultCmd = true
+}
+
+// initConfig reads in config file and ENV variables if set.
+func initConfig() {
+	// Search the current directory for a config file
+	viper.SetConfigType("yaml")
+	viper.SetConfigName(".codefuse-config")
+	viper.AddConfigPath(".")
+	viper.AutomaticEnv()
+
+	// If a config file is found, read it in
+	if err := viper.ReadInConfig(); err == nil {
+		// fmt.Println("Using config file:", viper.ConfigFileUsed())
+	}
+}
+
+
+File: 
+internal\files\reading.go
+Content: 
+// Contains code to read the content of files and directories.
+package files
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+)
+
+// Given a root path returns all the file paths in the root directory
+// and its subdirectories.
+func GetAllFilePaths(root string, prefixesToFilter []string, extensionsToKeep []string,
+	extensionsToIgnore []string) ([]string, error) {
+	var filePaths []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// Skip the root directory.
+		if path == root {
+			return nil
+		}
+		// First filter out the paths that contain any of the prefixes in prefixesToFilter.
+		for _, prefixToFilter := range prefixesToFilter {
+			if strings.HasPrefix(filepath.Base(path), prefixToFilter) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		// Filter out the files that have the extensions in extensionsToFilter.
+		for _, ext := range extensionsToIgnore {
+			if filepath.Ext(path) == ext {
+				return nil
+			}
+		}
+		// Process file based on extension filters.
+		if d.IsDir() || len(extensionsToKeep) == 0 {
+			filePaths = append(filePaths, path)
+			return nil
+		}
+		for _, ext := range extensionsToKeep {
+			if filepath.Ext(path) == ext {
+				filePaths = append(filePaths, path)
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return filePaths, nil
+}
+
+// Given a file path, GetFileContent returns the content of the file.
+func getFileContent(filePath string) (string, error) {
+	dat, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+	return string(dat), nil
+}
+
+// Given a list of file paths, GetContentMapOfFiles returns a map of file paths to their content.
+func GetContentMapOfFiles(filePaths []string, maxConcurrency int) (map[string]string, error) {
+	var fileContentMap sync.Map
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(filePaths))
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	for _, path := range filePaths {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			info, err := os.Stat(p)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			if !info.IsDir() {
+				fileContent, err := getFileContent(p)
+				if err != nil {
+					errChan <- err
+					return
+				}
+				fileContentMap.Store(p, fileContent)
+			} else {
+				dirEntries, err := os.ReadDir(p)
+				if err != nil {
+					errChan <- err
+					return
+				}
+				if len(dirEntries) == 0 {
+					fileContentMap.Store(p, "empty directory")
+				}
+			}
+		}(path)
+	}
+	wg.Wait()
+	close(errChan)
+	if len(errChan) > 0 {
+		return nil, <-errChan
+	}
+
+	resultMap := make(map[string]string)
+	fileContentMap.Range(func(key, value interface{}) bool {
+		resultMap[key.(string)] = value.(string)
+		return true
+	})
+
+	return resultMap, nil
+}
+
+
+File: 
+internal\files\writing.go
+Content: 
+// Contains code to write content to files.
+package files
+
+import (
+	"fmt"
+	"os"
+)
+
+// Saves a string to a file.
+func SaveStringToFile(content string, path string) (err error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	// https://trstringer.com/golang-deferred-function-error-handling/
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			if err == nil {
+				err = fmt.Errorf("failed to close file: %w", closeErr)
+			}
+		}
+	}()
+	_, err = f.WriteString(content)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+
+File: 
+internal\formatting\format.go
+Content: 
+// Contains code to format the project structure into a string.
+package formatting
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// Given a path, calculatePathLevel returns the level of the path in the directory structure.
+func calculatePathLevel(path string) int {
+	return len(strings.Split(path, string(os.PathSeparator))) - 1
+}
+
+// Given a list of paths, an index, and a level, checkIfLastPathAtLevel returns true if the path
+func checkIfLastPathAtLevel(paths []string, i, level int) bool {
+	return i == len(paths)-1 || len(strings.Split(paths[i+1], string(os.PathSeparator))) <= level
+}
+
+// Given a level prefix, level, and a boolean indicating if the path is the last at the level,
+func buildTreeBranch(levelPrefix map[int]string, level int, isLast bool) string {
+	var branchPrefix strings.Builder
+	for l := 0; l < level; l++ {
+		branchPrefix.WriteString(levelPrefix[l])
+	}
+
+	branch := "├── "
+	if isLast {
+		branch = "└── "
+		levelPrefix[level] = "    "
+	} else {
+		levelPrefix[level] = "│   "
+	}
+
+	return branchPrefix.String() + branch
+}
+
+// Given a list of paths, generatePathTree returns a string representation of the
+// directory structure.
+func GeneratePathTree(paths []string) string {
+	// Sort the paths lexicographically to ensure correct tree structure
+	sort.Strings(paths)
+	var treeBuilder strings.Builder
+	levelPrefix := make(map[int]string)
+
+	for i, path := range paths {
+		level := calculatePathLevel(path)
+		isLast := checkIfLastPathAtLevel(paths, i, level)
+		treeBuilder.WriteString(buildTreeBranch(levelPrefix, level, isLast) + filepath.Base(path) + "\n")
+	}
+
+	return treeBuilder.String()
+}
+
+// Creates a string representation of the project.
+func CreateProjectString(projectTree string, fileContentMap map[string]string) string {
+	var projectString strings.Builder
+	projectString.WriteString("Project Directory Structure:" + "\n")
+	projectString.WriteString(projectTree + "\n\n")
+
+	// Collect and sort the file paths lexicographically to make the function deterministic
+	filePaths := make([]string, 0, len(fileContentMap))
+	for filePath := range fileContentMap {
+		filePaths = append(filePaths, filePath)
+	}
+	sort.Strings(filePaths)
+
+	for _, fileName := range filePaths {
+		fileContent := fileContentMap[fileName]
+		projectString.WriteString("File: " + "\n")
+		projectString.WriteString(fileName + "\n")
+		projectString.WriteString("Content: " + "\n")
+		projectString.WriteString(fileContent + "\n\n")
+	}
+	return projectString.String()
+}
+
+
+File: 
+internal\logging\usage.go
+Content: 
+package logging
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+)
+
+// DisplayUsageAndExit displays the usage information and exits the program.
+func DisplayUsageAndExit() {
+	log.SetFlags(0)
+	printUsage()
+	os.Exit(1)
+}
+
+// printUsage prints the detailed usage information.
+func printUsage() {
+	fmt.Println("Usage: ai-code-review [options] <root directory>")
+	fmt.Println()
+	fmt.Println("Options:")
+	flag.VisitAll(func(f *flag.Flag) {
+		fmt.Printf("  -%s=%s\n    \t%s\n", f.Name, f.DefValue, f.Usage)
+	})
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  ai-code-review .")
+	fmt.Println("  ai-code-review cmd/")
+	fmt.Println("  ai-code-review cmd/ -concurrency=100 -ignore=.,readme,tests")
+	fmt.Println()
+	fmt.Println("Notes:")
+	fmt.Println("  - The root directory should be the first non-flag argument.")
+	fmt.Println("  - Patterns are used to exclude specific files or directories from processing.")
+}
+
+
+File: 
+internal\review\review.go
+Content: 
+package review
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+
+	"github.com/AkhilSharma90/AI-Code-Bundler/internal/files"
+)
+
+type ReviewInput struct {
+	Code string `json:"code"`
+}
+
+type ReviewOutput struct {
+	Review string `json:"review"`
+}
+
+const reviewURL = "https://reviewcode-qcgl4feadq-uc.a.run.app"
+
+func prepareRequest(codeToReview string, apiKey string) (*http.Request, error) {
+	input := ReviewInput{
+		Code: codeToReview,
+	}
+	jsonData, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest("POST", reviewURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+	// Set the request header to specify JSON format
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("api-key", apiKey)
+
+	return req, nil
+}
+
+func sendRequest(req *http.Request) (*http.Response, error) {
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("Error sending review request to %s: %v", reviewURL, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Error: received status code %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusUnauthorized {
+			log.Fatalf("Unauthorized: you have provided an invalid codefuse API key.")
+		} else {
+			log.Fatalf("Failed to review code: status code %d", resp.StatusCode)
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+func saveReviewToFile(output ReviewOutput) error {
+	err := files.SaveStringToFile(output.Review, "codefuse-review.md")
+	if err != nil {
+		return err
+	}
+	log.Printf("Successfully saved code review to codefuse-review.md")
+	return nil
+}
+
+func Review(codeToReview string, apiKey string) {
+	log.Printf("Reviewing code please wait...")
+
+	// Prepare the request to review the code
+	req, err := prepareRequest(codeToReview, apiKey)
+	if err != nil {
+		log.Fatalf("Error preparing review request: %v", err)
+	}
+
+	// Send the request to review the code
+	resp, err := sendRequest(req)
+	if err != nil {
+		log.Fatalf("Error sending review request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Decode the response
+	var output ReviewOutput
+	err = json.NewDecoder(resp.Body).Decode(&output)
+	if err != nil {
+		log.Fatalf("Error decoding review response: %v", err)
+	}
+
+	// Save the review to a file
+	err = saveReviewToFile(output)
+	if err != nil {
+		log.Fatalf("Error saving review to file: %v", err)
+	}
+
+}
+
+
+File: 
+main.go
+Content: 
+package main
+
+import "github.com/AkhilSharma90/AI-Code-Bundler/cmd"
+
+func main() {
+	cmd.Execute()
+}
+
+
+File: 
+scripts\install.ps1
+Content: 
+# Fetch the latest version
+$versionUrl = "https://api.github.com/repos/vossenwout/codefuse/releases/latest"
+try {
+    $response = Invoke-RestMethod -Uri $versionUrl
+    $VERSION = $response.tag_name
+} catch {
+    Write-Host "Error: Failed to fetch the latest version."
+    return
+}
+
+$BASE_URL = "https://github.com/vossenwout/codefuse/releases/download/$VERSION"
+
+# Detect architecture
+if ([System.Environment]::Is64BitOperatingSystem) {
+    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+        $ARCH = "arm64"
+    } else {
+        $ARCH = "x86_64"
+    }
+} else {
+    $ARCH = "i386"
+}
+
+# Form download URL
+$FILE = "codefuse_Windows_${ARCH}.zip"
+
+Write-Host "Downloading $FILE from $BASE_URL..."
+
+# Download and extract the binary
+$downloadUrl = "$BASE_URL/$FILE"
+$destination = "$env:TEMP\codefuse.zip"
+try {
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $destination
+    Write-Host "Download completed."
+} catch {
+    Write-Host "Error: Failed to download $FILE."
+    return
+}
+
+Write-Host "Extracting $destination..."
+try {
+    Expand-Archive -Path $destination -DestinationPath $env:TEMP\codefuse -Force
+    Write-Host "Extraction completed."
+} catch {
+    Write-Host "Error: Failed to extract $destination."
+    return
+}
+
+# Move the binary to a directory in the PATH (C:\Program Files by default)
+$installPath = "C:\Program Files\codefuse"
+if (!(Test-Path -Path $installPath)) {
+    try {
+        New-Item -ItemType Directory -Path $installPath
+    } catch {
+        Write-Host "Error: Failed to create installation directory at $installPath."
+        return
+    }
+}
+
+try {
+    Move-Item "$env:TEMP\codefuse\codefuse.exe" "$installPath\codefuse.exe" -Force
+    Write-Host "codefuse.exe moved to $installPath."
+} catch {
+    Write-Host "Error: Failed to move codefuse.exe to $installPath. Are you running this script as an administrator?"
+    return
+}
+
+# Optionally add to PATH if not already
+if (-not ([Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine) -contains $installPath)) {
+    try {
+        [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine) + ";$installPath", [System.EnvironmentVariableTarget]::Machine)
+        Write-Host "codefuse path added to system PATH. You may need to restart your terminal."
+    } catch {
+        Write-Host "Error: Failed to update system PATH. Are you running this script as an administrator?"
+        return
+    }
+}
+
+# Cleanup
+try {
+    Remove-Item $destination -Force
+    Remove-Item "$env:TEMP\codefuse" -Recurse -Force
+    Write-Host "Cleanup completed."
+} catch {
+    Write-Host "Error: Failed to clean up temporary files."
+}
+
+Write-Host "codefuse has been installed successfully!"
+
+
+File: 
+scripts\install.sh
+Content: 
+#!/bin/bash
+
+# Fetch the latest version
+VERSION=$(curl --silent "https://api.github.com/repos/vossenwout/codefuse/releases/latest" | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+BASE_URL="https://github.com/vossenwout/codefuse/releases/download/$VERSION"
+
+# Detect OS and architecture
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+if [ "$OS" == "Darwin" ]; then
+    OS="Darwin"
+elif [ "$OS" == "Linux" ]; then
+    OS="Linux"
+else
+    echo "Unsupported OS: $OS"
+    exit 1
+fi
+
+# Translate architecture
+case "$ARCH" in
+    x86_64)
+        ARCH="x86_64"
+        ;;
+    arm64)
+        ARCH="arm64"
+        ;;
+    i386)
+        ARCH="i386"
+        ;;
+    *)
+        echo "Unsupported architecture: $ARCH"
+        exit 1
+        ;;
+esac
+
+# Form download URL based on OS and ARCH
+FILE="codefuse_${OS}_${ARCH}.tar.gz"
+
+echo file: $BASE_URL/$FILE
+
+# Download and install binary
+echo "Downloading $FILE..."
+curl -L -o codefuse.tar.gz $BASE_URL/$FILE
+
+# Extract the downloaded file
+echo "Extracting..."
+tar -xzf codefuse.tar.gz
+
+# Move the binary to /usr/local/bin/
+sudo mv codefuse /usr/local/bin/
+
+# Cleanup
+rm codefuse.tar.gz
+
+echo "codefuse has been installed successfully!"
+
+
