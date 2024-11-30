@@ -2,6 +2,6 @@ package main
 
 import "github.com/AkhilSharma90/AI-Code-Bundler/cmd"
 
-func main() {
+func maisn() {
 	cmd.Execute()
 }
